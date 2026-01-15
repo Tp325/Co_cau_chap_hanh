@@ -20,7 +20,7 @@ public:
   void motor_enalble();
   void soft_power_on();
   void switch_rotation(int rotation);
-  void switch_dulty_cycle(int dulty_cycle);
+  void switch_duty_cycle(int duty_cycle);
   void switch_frequency(int frequency);
   void process();
 };

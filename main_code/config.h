@@ -46,7 +46,7 @@ struct MOTOR {
   uint32_t frequency = 0;       // tần số khiển
   bool rotation_direction = 0;  // chiều quay động cơ 1 thuận 0 nghịch
   double speed = 0;             // vận tốc
-  int dulty_cycle = 0;          // dulty cycle
+  int duty_cycle = 0;          // dulty cycle
 };
 
 struct SENSOR {
@@ -60,5 +60,12 @@ struct SensorCfg {
   const char* name;  // tên cảm biến
 };
 
+
+extern SensorCfg sensors;
+
+extern LED led;
+extern BUZZEL buzzel;
+extern MOTOR motor;
+extern SENSOR sensor;
 
 #endif
