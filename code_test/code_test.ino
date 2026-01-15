@@ -9,8 +9,8 @@
 #define emergency_button 32
 
 #define enable_motor_pin 21
-int PWM_1_pin = 22;
-int PWM_2_pin = 23;
+#define PWM_1_pin = 22
+#define PWM_2_pin = 23
 #define encoder_a_pin 18
 #define encoder_b_pin 19
 
