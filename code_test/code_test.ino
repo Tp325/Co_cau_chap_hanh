@@ -1,263 +1,260 @@
+// LOGIC: Distance > 20 -> Rotate CW (Positive RPM).
+// Distance < 20 -> Rotate CCW (Negative RPM).
+
+#include <Arduino.h>
 #include <ESP32Encoder.h>
+#include <freertos/semphr.h>
 #include <ModbusMaster.h>
 
-#define led_red_pin 27
-#define led_yellow_pin 26
-#define led_blue_pin 25
-#define buzzel_pin 33
+#define PWM_PIN_1 22       
+#define PWM_PIN_2 23       
+#define ENABLE_PIN 21      
+#define ENCODER_A 18
+#define ENCODER_B 19
+#define SENSOR_RX 16
+#define SENSOR_TX 17
 
-#define emergency_button 32
+#define SENSOR_ID 0x50     
+#define SENSOR_REG 0x34    
 
-#define enable_motor_pin 21
-#define PWM_1_pin = 22
-#define PWM_2_pin = 23
-#define encoder_a_pin 18
-#define encoder_b_pin 19
+const double PULSE_PER_REV = 2304.0; 
+const uint32_t PWM_FREQ = 20000;
+const uint8_t PWM_RES = 8;
+const long LOOP_TIME_MS = 50; 
+const double SETPOINT_POS = 20.0; // Vị trí cân bằng 20cm
 
-#define S_RX 16
-#define S_TX 17
-
-
-struct LED {
-  bool led_red_state = 0;     // trạng thái led đỏ
-  bool led_yellow_state = 0;  // trạng thái led vàng
-  bool led_blue_state = 0;    // trạng thái led xanh
+// --- 2. STRUCTS ---
+struct PID_PARAM {
+    double Kp, Ki, Kd;
+    double integral_err = 0;
+    double last_err = 0;
 };
 
-struct BUZZEL {
-  bool buzzel_state = 0;  // trạng thái còi
+struct SYSTEM_STATE {
+    // Motor State
+    double target_rpm = 0;    
+    double current_rpm = 0;   
+    int pwm_value = 0;        
+    
+    // Sensor State
+    double distance_cm = 0.0;
+    bool system_ready = false; 
 };
 
-struct MOTOR {
-  bool is_ready = 0;               // động cơ đã sẵn sàng chưa
-  double last_motor_state = 0;     // giá trị trạng thái cũ của động cơ
-  double is_running = 0;           // động cơ có đang chạy hay không
-  bool time_cycle = 0;             // chu kỳ
-  uint32_t frequency = 0;          // tần số khiển
-  uint8_t rotation_direction = 0;  // chiều quay động cơ 1 thuận 0 nghịch
-  double speed = 0;                // vận tốc
-};
-
-struct SENSOR {
-  double is_running = 0;  // cảm biến có đang chạy hay không
-  double distance = 0;    // khoảng cách hiện tại
-};
-struct SensorCfg {
-  uint8_t slaveID;   // ID cảm bienes
-  uint16_t regAddr;  // thanh ghi
-  uint32_t baud;     // baudrate
-  const char* name;  // tên cảm biến
-};
-SensorCfg sensors[] = {
-  { 0x50, 0x34, 115200, "distance" }
-};
-
-ModbusMaster node;
+// --- BIẾN TOÀN CỤC ---
 ESP32Encoder encoder;
-LED led;
-BUZZEL buzzel;
-MOTOR motor;
-SENSOR sensor;
+ModbusMaster node;
+SemaphoreHandle_t xSysMutex;
+SYSTEM_STATE sys;
+
+PID_PARAM pid_speed; 
+PID_PARAM pid_pos;   
+
+// --- PROTOTYPES ---
+void vTaskPID_Motor(void *pvParameters);
+void vTaskSensor_Modbus(void *pvParameters); // Task đọc cảm biến 
+void vTaskConsole(void *pvParameters);
+double computePID_Speed(double target, double current, double dt);
+double computePID_Pos(double setpoint, double input, double dt);
+
+
 
 void setup() {
-  Serial2.begin(115200, SERIAL_8N1, S_RX, S_TX);
-  Serial.begin(9600);
+    Serial.begin(115200);
+    
+    // Setup Modbus 
+    Serial2.begin(115200, SERIAL_8N1, SENSOR_RX, SENSOR_TX);
+    node.begin(SENSOR_ID, Serial2);
 
-  pinMode(led_red_pin, OUTPUT);
-  pinMode(led_yellow_pin, OUTPUT);
-  pinMode(led_blue_pin, OUTPUT);
-  pinMode(buzzel_pin, OUTPUT);
+    ESP32Encoder::useInternalWeakPullResistors = puType::up;
+    encoder.attachHalfQuad(ENCODER_A, ENCODER_B);
+    encoder.setCount(0);
 
-  pinMode(emergency_button, INPUT);
+    pinMode(ENABLE_PIN, OUTPUT);
+    digitalWrite(ENABLE_PIN, HIGH);
+    ledcAttach(PWM_PIN_1, PWM_FREQ, PWM_RES);
+    ledcAttach(PWM_PIN_2, PWM_FREQ, PWM_RES);
 
-  pinMode(enable_motor_pin, OUTPUT);
-  pinMode(PWM_1_pin, OUTPUT);
-  pinMode(PWM_2_pin, OUTPUT);
-  // pinMode(encoder_a_pin, INPUT);
-  // pinMode(encoder_b_pin, INPUT);
+    xSysMutex = xSemaphoreCreateMutex();
 
-  digitalWrite(led_red_pin, led.led_red_state);
-  digitalWrite(led_yellow_pin, led.led_yellow_state);
-  digitalWrite(led_blue_pin, led.led_blue_state);
-  digitalWrite(buzzel_pin, buzzel.buzzel_state);
+    // --- TUNING (CHỈNH PID Ở ĐÂY)************************************************************ ---
+    
+    // 1. PID TỐC ĐỘ (Inner Loop)
+    pid_speed.Kp = 4.0;
+    pid_speed.Ki = 15.0; 
+    pid_speed.Kd = 0.2;
 
-  encoder.attachHalfQuad(encoder_a_pin, encoder_b_pin);
-  encoder.setCount(0);
+    // 2. PID VỊ TRÍ 
+    // Quy tắc: Dist > 20 -> Cần Thuận (+) -> Error = Input - Setpoint
+    pid_pos.Kp = 4.0;   // Kp=4: Lệch 1cm chạy 4 RPM
+    pid_pos.Ki = 0.1;   // Ki nhỏ để tránh trôi
+    pid_pos.Kd = 8.0;   // Kd cao để hãm khi bóng lăn nhanh
 
-  motor.rotation_direction = 1;
-  motor.is_ready = 1;
-  motor.frequency = 40000;
+    // Tasks
+    xTaskCreatePinnedToCore(vTaskPID_Motor, "MotorTask", 4096, NULL, 5, NULL, 1);
+    xTaskCreatePinnedToCore(vTaskSensor_Modbus, "SensorTask", 4096, NULL, 3, NULL, 1);
+    xTaskCreatePinnedToCore(vTaskConsole, "DebugTask", 2048, NULL, 1, NULL, 0);
 
-
-  xTaskCreatePinnedToCore(vTaskMotor, "TaskMotor", 4096, NULL, 5, NULL, 0);
-  xTaskCreatePinnedToCore(vTaskButton, "TaskButton", 2048, NULL, 5, NULL, 1);
-  xTaskCreatePinnedToCore(vTaskLED, "TaskLED", 2048, NULL, 5, NULL, 1);
-  xTaskCreatePinnedToCore(vTaskBuzzel, "TaskBuzzel", 2048, NULL, 5, NULL, 1);
-  xTaskCreatePinnedToCore(vTaskEncoder, "TaskEncoder", 2048, NULL, 5, NULL, 0);
-  xTaskCreatePinnedToCore(vTaskSensor, "TaskSensor", 2048, NULL, 5, NULL, 1);
-  xTaskCreatePinnedToCore(vTaskDebug, "TaskDebug", 2048, NULL, 5, NULL, 1);
-  delay(1000);
-  vTaskDelete(NULL);
+    Serial.println("System Restored: Separate Sensor Task");
 }
 
-void loop() {
-}
+void loop() { vTaskDelay(1000); }
 
-void vTaskDebug(void* pvParameters) {
-  while (1) {
-    // Serial.printf("Van toc: %.2f vong/phut, Khoang cach: %.2f cm \n", motor.speed, sensor.distance);
-    Serial.print("Van_toc(RPM):");
-    Serial.print(motor.speed);
-    Serial.print(",");
-    Serial.print("Khoang_cach(cm):");
-    Serial.println(sensor.distance);
-    vTaskDelay(100 / portTICK_PERIOD_MS);
-  }
-}
+// ================= TASK: SENSOR & BALANCE LOGIC =================
+void vTaskSensor_Modbus(void *pvParameters) {
+    while (1) {
+        // 1. Đọc Modbus 
+        uint8_t result = node.readHoldingRegisters(SENSOR_REG, 1);
+        
+        double current_dist = 0;
+        bool read_success = false;
 
-void vTaskSensor(void* pvParameters) {
-  sensor.is_running = 0;
-  while (1) {
-    sensor.distance = getSensorValue(sensors[0].slaveID, sensors[0].regAddr, 3) / 10.0;
-    vTaskDelay(500 / portTICK_PERIOD_MS);
-  }
-}
-
-void vTaskEncoder(void* pvParameters) {
-  unsigned long time_counter = millis();
-  long xung_truoc = 0;
-  while (1) {
-    if (millis() - time_counter >= 100) {
-      long delta_xung = encoder.getCount() - xung_truoc;
-      xung_truoc = encoder.getCount();
-      motor.speed = (delta_xung / 1152.0) * (1000.0 / (millis() - time_counter)) * 60.0;
-      time_counter = millis();
-    }
-    vTaskDelay(50 / portTICK_PERIOD_MS);
-  }
-}
-
-void vTaskBuzzel(void* pvParameters) {
-  while (1) {
-    digitalWrite(buzzel_pin, buzzel.buzzel_state);
-    vTaskDelay(500 / portTICK_PERIOD_MS);
-  }
-}
-void vTaskLED(void* pvParameters) {
-  while (1) {
-    digitalWrite(led_red_pin, led.led_red_state);
-    digitalWrite(led_yellow_pin, led.led_yellow_state);
-    digitalWrite(led_blue_pin, led.led_blue_state);
-    vTaskDelay(500 / portTICK_PERIOD_MS);
-  }
-}
-
-void vTaskButton(void* pvParameters) {
-  uint32_t time_counter = millis();
-  while (1) {
-    if (digitalRead(emergency_button) == 0 && millis() - time_counter >= 250) {
-      motor.is_ready = !motor.is_ready;
-      motor.is_running = !motor.is_running;
-      if (motor.is_ready == 0) {
-        buzzel.buzzel_state = 1;
-        led.led_red_state = 1;
-        led.led_yellow_state = 0;
-        led.led_blue_state = 0;
-      } else {
-        buzzel.buzzel_state = 0;
-        led.led_red_state = 0;
-        led.led_yellow_state = 0;
-        led.led_blue_state = 1;
-      }
-      time_counter = millis();
-    }
-    vTaskDelay(20 / portTICK_PERIOD_MS);
-  }
-}
-
-void vTaskMotor(void* pvParameters) {
-  int pwm_pin;
-  if (motor.rotation_direction == 1) {
-    digitalWrite(PWM_1_pin, 0);
-    pwm_pin = PWM_2_pin;
-  } else {
-    digitalWrite(PWM_2_pin, 0);
-    pwm_pin = PWM_1_pin;
-  }
-  ledcAttach(pwm_pin, motor.frequency, 8);
-  if (motor.is_ready == 1) {
-    led.led_red_state = 0;
-    led.led_yellow_state = 1;
-    led.led_blue_state = 1;
-    digitalWrite(enable_motor_pin, HIGH);
-    motor.last_motor_state = 1;
-    motor.is_running = 1;
-    for (int i = 0; i <= 255; i++) {
-      ledcWrite(pwm_pin, i);
-      delay(20 / portTICK_PERIOD_MS);
-    }
-  } else {
-    digitalWrite(enable_motor_pin, LOW);
-  }
-
-  while (1) {
-    // cấp điện động cơ
-    if (motor.is_ready == 1) {
-      digitalWrite(enable_motor_pin, HIGH);
-      //Khởi động mềm
-      if (motor.is_running == 1 && motor.last_motor_state == 0) {
-        led.led_yellow_state = 1;
-        motor.last_motor_state = 1;
-        for (int i = 0; i <= 255; i++) {
-          ledcWrite(pwm_pin, i);
-          vTaskDelay(20 / portTICK_PERIOD_MS);
+        if (result == node.ku8MBSuccess) {
+            uint16_t raw = node.getResponseBuffer(0);
+            node.clearResponseBuffer();
+            current_dist = raw / 10.0;
+            read_success = true;
+        } else {
+            // Đọc lỗi
+            read_success = false;
         }
-      }
-      // tắt dần mềm
-      else if (motor.is_running == 0 && motor.last_motor_state == 1) {
-        led.led_yellow_state = 0;
-        motor.last_motor_state = 0;
-        for (int i = 255; i >= 0; i--) {
-          ledcWrite(pwm_pin, i);
-          vTaskDelay(20 / portTICK_PERIOD_MS);
+
+        // 2. Tính toán Cân bằng
+        double req_rpm = 0;
+
+        if (read_success && current_dist > 2.0 && current_dist < 50.0) {
+            // Tính toán PID Vị trí
+            // Khoảng cách > 20 -> Input > Setpoint -> Error Dương -> RPM Dương 
+            // Đúng yêu cầu: "Hơn 20 quay thuận"
+            req_rpm = computePID_Pos(SETPOINT_POS, current_dist, 0.2); // dt ~ 200ms
+
+            // Giới hạn tốc độ an toàn (Max 60 RPM)
+            if (req_rpm > 60) req_rpm = 60;
+            if (req_rpm < -60) req_rpm = -60;
+
+        } else {
+            // Lỗi cảm biến hoặc bóng ra ngoài -> Dừng
+            req_rpm = 0;
+            // Reset PID tích lũy để tránh vọt khi bóng quay lại
+            pid_pos.integral_err = 0;
         }
-      }
-      // duy trì trạng thái bật
-      else if (motor.is_running == 1 && motor.last_motor_state == 1) {
-        led.led_yellow_state = 1;
-        ledcWrite(pwm_pin, 255);
-      }
-      // duy trì trạng thái tắt
-      else if (motor.is_running == 0 && motor.last_motor_state == 0) {
-        led.led_yellow_state = 0;
-        ledcWrite(pwm_pin, 0);
-      }
+
+        // 3. Cập nhật dữ liệu cho Task Motor
+        if (xSemaphoreTake(xSysMutex, 10) == pdTRUE) {
+            sys.distance_cm = current_dist;
+            sys.system_ready = read_success;
+            sys.target_rpm = req_rpm; // Gửi lệnh tốc độ xuống
+            xSemaphoreGive(xSysMutex);
+        }
+
+        // Delay 200ms ( này tần số đọc cảm biến thay 200 để đổi tần số đọc)
+        vTaskDelay(200 / portTICK_PERIOD_MS); 
     }
-    // ngắt điện động cơ
-    else {
-      motor.last_motor_state = 0;
-      motor.is_running = 0;
-      ledcWrite(pwm_pin, 0);
-      vTaskDelay(1000 / portTICK_PERIOD_MS);
-      digitalWrite(enable_motor_pin, LOW);
-    }
-    vTaskDelay(20 / portTICK_PERIOD_MS);
-  }
 }
 
-int getSensorValue(uint8_t slaveID, uint16_t reg, uint8_t reTries) {
-  node.begin(slaveID, Serial2);
-  for (uint8_t t = 0; t < reTries; t++) {
-    if (node.readHoldingRegisters(reg, 1) == node.ku8MBSuccess) {
-      uint16_t value = node.getResponseBuffer(0);
-      node.clearResponseBuffer();
-      // Serial.println(value);
-      return value;
-    } else {
-      // Serial.print("Retry: ");
-      // Serial.println(t + 1);
+// ================= TASK: MOTOR PID =================
+void vTaskPID_Motor(void *pvParameters) {
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    const TickType_t xFrequency = pdMS_TO_TICKS(LOOP_TIME_MS);
+    long last_enc = 0;
+
+    while(1) {
+        vTaskDelayUntil(&xLastWakeTime, xFrequency);
+
+        // Sensing
+        long curr_enc = encoder.getCount();
+        long delta = curr_enc - last_enc;
+        last_enc = curr_enc;
+        double speed = ((double)delta / PULSE_PER_REV) * (60.0 / (LOOP_TIME_MS / 1000.0));
+
+        // Get Command
+        double target = 0;
+        bool active = false;
+        if (xSemaphoreTake(xSysMutex, 5) == pdTRUE) {
+            target = sys.target_rpm;
+            active = sys.system_ready;
+            sys.current_rpm = speed;
+            xSemaphoreGive(xSysMutex);
+        }
+
+        // Compute PID Speed
+        int pwm_out = 0;
+        // Nếu cảm biến OK thì chạy, không thì dừng
+        // Nếu muốn test motor mà không cần cảm biến, sửa 'active' thành 'true'
+        if (active) { 
+            double res = computePID_Speed(target, speed, LOOP_TIME_MS / 1000.0);
+            
+            if (res > 255) res = 255;
+            if (res < -255) res = -255;
+            if (target == 0 && abs(res) < 15) res = 0; // Deadband
+
+            pwm_out = (int)res;
+        } else {
+            pid_speed.integral_err = 0;
+            pwm_out = 0;
+        }
+
+        // Actuation ( logic đảo chiều)
+        if (pwm_out >= 0) {
+            ledcWrite(PWM_PIN_1, 0);
+            ledcWrite(PWM_PIN_2, abs(pwm_out));
+        } else {
+            ledcWrite(PWM_PIN_1, abs(pwm_out));
+            ledcWrite(PWM_PIN_2, 0);
+        }
+        sys.pwm_value = pwm_out;
     }
-    vTaskDelay(200 / portTICK_PERIOD_MS);
-  }
-  return 0;
+}
+
+// ================= PID ALGORITHMS =================
+
+// PID 1: VỊ TRÍ (Khoảng cách -> RPM)
+double computePID_Pos(double setpoint, double input, double dt) {
+    // Logic: Input (30) > Setpoint (20) => Error (+10) => Output (+) => Quay thuận => Kéo bóng về
+    double error = input - setpoint; 
+
+    double P = pid_pos.Kp * error;
+    
+    pid_pos.integral_err += error * dt;
+    // Kẹp I vòng ngoài nhỏ thôi
+    if (pid_pos.integral_err > 20) pid_pos.integral_err = 20;
+    else if (pid_pos.integral_err < -20) pid_pos.integral_err = -20;
+    double I = pid_pos.Ki * pid_pos.integral_err;
+
+    double D = pid_pos.Kd * ((error - pid_pos.last_err) / dt);
+    pid_pos.last_err = error;
+
+    return P + I + D;
+}
+
+// PID 2: TỐC ĐỘ (RPM -> PWM)
+double computePID_Speed(double target, double current, double dt) {
+    double error = target - current;
+    double P = pid_speed.Kp * error;
+    
+    pid_speed.integral_err += error * dt;
+    double max_I = 255.0 / pid_speed.Ki;
+    if (pid_speed.integral_err > max_I) pid_speed.integral_err = max_I;
+    else if (pid_speed.integral_err < -max_I) pid_speed.integral_err = -max_I;
+    double I = pid_speed.Ki * pid_speed.integral_err;
+
+    double D = pid_speed.Kd * ((error - pid_speed.last_err) / dt);
+    pid_speed.last_err = error;
+
+    return P + I + D;
+}
+
+// ================= CONSOLE =================
+void vTaskConsole(void *pvParameters) {
+    while(1) {
+        if (xSemaphoreTake(xSysMutex, 10) == pdTRUE) {
+            // Format: Dist, Setpoint, RPM_Command, RPM_Real
+            Serial.print("Dist:"); Serial.print(sys.distance_cm);
+            Serial.print(",Set:20.0");
+            Serial.print(",RPM_Cmd:"); Serial.print(sys.target_rpm);
+            Serial.print(",RPM_Act:"); Serial.println(sys.current_rpm);
+            xSemaphoreGive(xSysMutex);
+        }
+        vTaskDelay(100 / portTICK_PERIOD_MS);
+    }
 }
