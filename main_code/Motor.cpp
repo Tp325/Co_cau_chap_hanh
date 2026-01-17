@@ -1,90 +1,98 @@
 #include "Motor.h"
+
 Motor::Motor(MOTOR *motor) {
   this->motor = motor;
+  this->xung_truoc = 0;
+  this->time_counter = 0;
 }
+
 void Motor::begin(uint16_t PWM_frequency, uint8_t rotation_direction) {
   pinMode(motor->enable_motor_pin, OUTPUT);
   pinMode(motor->PWM_1_pin, OUTPUT);
   pinMode(motor->PWM_2_pin, OUTPUT);
-  motor->rotation_direction = 1;
-  this->pwm_pin = motor->rotation_direction == 1 ? motor->PWM_2_pin : motor->PWM_1_pin;
-  if (pwm_pin == motor->PWM_2_pin)
-    digitalWrite(motor->PWM_1_pin, 0);
-  else
-    digitalWrite(motor->PWM_2_pin, 0);
-  motor->frequency = PWM_frequency;
+  
+  // Cài đặt hướng mặc định
   motor->rotation_direction = rotation_direction;
-  motor->time_cycle = 1.0 / (PWM_frequency * 1.0);
+  
+  // Logic PWM
+  // rotation = 1 -> PWM_2 (Thuận)
+  // rotation = 0 -> PWM_1 (Nghịch)
+  if (motor->rotation_direction == 1) {
+      this->pwm_pin = motor->PWM_2_pin;
+      digitalWrite(motor->PWM_1_pin, 0);
+  } else {
+      this->pwm_pin = motor->PWM_1_pin;
+      digitalWrite(motor->PWM_2_pin, 0);
+  }
+
+  motor->frequency = PWM_frequency;
+  
+  // Setup Encoder
+  ESP32Encoder::useInternalWeakPullResistors = puType::up;
   encoder.attachHalfQuad(motor->encoder_a_pin, motor->encoder_b_pin);
   encoder.setCount(0);
-  ledcAttach(pwm_pin, motor->frequency, 10);
+  
+  // Setup PWM:ĐỘ PHÂN GIẢI 10 BIT
+  ledcAttach(this->pwm_pin, motor->frequency, 10);
 }
 
-int Motor::get_speed() {
-  if (millis() - time_counter >= 100) {
-    long delta_xung = encoder.getCount() - xung_truoc;
-    xung_truoc = encoder.getCount();
-    time_counter = millis();
-    return ((delta_xung / 1152.0) * (1000.0 / (millis() - time_counter)) * 60.0);
-  } else return motor->speed;
-}
-
-void Motor::power_off_motor() {
-  motor->is_ready = 0;
-  motor->is_running = 0;
-  motor->last_motor_state = 0;
-  motor->duty_cycle = 0;
-  ledcWrite(pwm_pin, motor->duty_cycle);
-  vTaskDelay(1000 / portTICK_PERIOD_MS);
-  digitalWrite(motor->enable_motor_pin, LOW);
-}
 void Motor::motor_enalble() {
   motor->is_ready = 1;
   digitalWrite(motor->enable_motor_pin, HIGH);
 }
-void Motor::soft_power_off() {
-  motor->is_ready = 1;
-  motor->is_running = 0;
-  motor->last_motor_state = 0;
-  for (int i = 1023; i >= 0; i--) {
-    ledcWrite(pwm_pin, i);
-    motor->duty_cycle = i;
-    vTaskDelay(20 / portTICK_PERIOD_MS);
-  }
-}
-void Motor::soft_power_on() {
-  motor->is_ready = 1;
-  motor->is_running = 1;
-  motor->last_motor_state = 1;
-  for (int i = 0; i <= 1023; i++) {
-    ledcWrite(pwm_pin, i);
-    motor->duty_cycle = i;
-    vTaskDelay(20 / portTICK_PERIOD_MS);
-  }
-}
+
 void Motor::switch_rotation(int rotation) {
-  ledcWrite(pwm_pin, 0);
-  motor->rotation_direction = rotation;
-  this->pwm_pin = motor->rotation_direction == 1 ? motor->PWM_2_pin : motor->PWM_1_pin;
-  if (pwm_pin == motor->PWM_2_pin)
-    digitalWrite(motor->PWM_1_pin, 0);
-  else
-    digitalWrite(motor->PWM_2_pin, 0);
-  ledcAttach(pwm_pin, motor->frequency, 10);
+  // Nếu đổi chiều thì reset chân cũ về 0 và attach chân mới
+  if (motor->rotation_direction != rotation) {
+      ledcWrite(this->pwm_pin, 0); // Tắt chân hiện tại
+      ledcDetach(this->pwm_pin);   // Gỡ PWM khỏi chân cũ
+      
+      motor->rotation_direction = rotation;
+      
+      if (motor->rotation_direction == 1) {
+          this->pwm_pin = motor->PWM_2_pin;
+          digitalWrite(motor->PWM_1_pin, 0);
+      } else {
+          this->pwm_pin = motor->PWM_1_pin;
+          digitalWrite(motor->PWM_2_pin, 0);
+      }
+      // Attach PWM vào chân mới
+      ledcAttach(this->pwm_pin, motor->frequency, 10);
+  }
 }
+
 void Motor::switch_duty_cycle(int duty_cycle) {
   motor->duty_cycle = duty_cycle;
 }
-void Motor::switch_frequency(int frequency) {
-  motor->frequency = frequency;
-  ledcAttach(pwm_pin, motor->frequency, 10);
-}
+
 void Motor::process() {
   if (motor->is_ready == 1) {
-    if (motor->duty_cycle > 10)
-      motor->is_running = 1;
-    ledcWrite(pwm_pin, motor->duty_cycle);
+    ledcWrite(this->pwm_pin, motor->duty_cycle);
   } else {
-    power_off_motor();
+    ledcWrite(this->pwm_pin, 0);
   }
+}
+
+void Motor::soft_power_on() {
+    motor->is_ready = 1;
+    // Hàm này chỉ để bật cờ sẵn sàng, 
+    // logic tăng tốc từ từ nên để PID lo
+}
+
+int Motor::get_speed() {
+  // Tính RPM: (Xung / 2304) * (60000ms / delta_time)
+  // thông số từ NSX: 1152 * 2  = 2304
+  if (millis() - time_counter >= 20) { // Cập nhật mỗi 20ms     ***************** chỉnh cái này với ở apptasks.cpp *****************
+    long current_count = encoder.getCount();
+    long delta_xung = current_count - xung_truoc;
+    xung_truoc = current_count;
+    
+    long dt = millis() - time_counter;
+    time_counter = millis();
+    
+    // Tính RPM
+    double rpm = ((double)delta_xung / 2304.0) * (60000.0 / dt);
+    return (int)rpm;
+  } 
+  return motor->speed; // Trả về giá trị cũ nếu chưa đủ thời gian
 }

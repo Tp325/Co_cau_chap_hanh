@@ -1,5 +1,5 @@
-#ifndef LIGHT_H
-#define LIGHT_H
+#ifndef LED_H
+#define LED_H
 #include "config.h"
 #include <Arduino.h>
 
@@ -19,5 +19,4 @@ public:
   void process();
   void set_led(int light_number, int state);
 };
-
 #endif

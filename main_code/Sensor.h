@@ -8,11 +8,14 @@ class Sensor {
 private:
   ModbusMaster node;
   SensorCfg *sensor_config;
+  
   int getSensorValue(uint8_t reTries);
+  
 public:
   Sensor(SensorCfg *distance_sensor);
   void begin();
+  
+  // Trả về khoảng cách CM
   float get_distance();
 };
-
 #endif

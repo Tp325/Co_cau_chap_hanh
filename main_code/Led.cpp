@@ -14,20 +14,20 @@ void LIGHT::begin() {
 }
 
 void LIGHT::process() {
-  digitalWrite(led_red_pin,buff_led->led_red_state);
-  digitalWrite(led_yellow_pin,buff_led->led_yellow_state);
-  digitalWrite(led_blue_pin,buff_led->led_blue_state);
+  digitalWrite(led_red_pin, buff_led->led_red_state);
+  digitalWrite(led_yellow_pin, buff_led->led_yellow_state);
+  digitalWrite(led_blue_pin, buff_led->led_blue_state);
 }
 
 void LIGHT::set_led(int light_number, int state) {
   switch (light_number) {
-    case 1:
+    case led_red:
      buff_led->led_red_state = state;
       break;
-    case 2:
+    case led_yellow:
      buff_led->led_yellow_state = state;
       break;
-    case 3:
+    case led_blue:
      buff_led->led_blue_state = state;
       break;
   }
