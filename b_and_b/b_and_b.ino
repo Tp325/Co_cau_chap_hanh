@@ -4,6 +4,8 @@
 #include "Motor.h"
 #include "Sensors.h"
 
+volatile bool newDataAvailable = false; // Cờ báo có dữ liệu mới
+
 // --- KHỞI TẠO ---
 Motor motor;
 LaserSensor laser;
@@ -108,47 +110,86 @@ void TaskControl(void *pvParameters) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
     const TickType_t xFrequency = pdMS_TO_TICKS(10); // 100Hz
 
+    // Biến lưu góc mục tiêu (Giữ nguyên giá trị cũ cho đến khi có tính toán mới)
+    float targetAngle = 0.0;
+
     for (;;) {
         handleButton();
-        float currentDist = laser.getDistance();
+        float currentDist = laser.getDistance(); // Lấy giá trị hiện tại (có thể là cũ)
 
-        // Safety: Mất bóng -> Dừng
+        // --- Safety ---
         if (currentState == STATE_RUNNING && currentDist > SAFETY_DIST) {
             stopSystem();
         }
 
-        if (currentState == STATE_IDLE) {
-            motor.stop();
-            static int blink = 0;
-            digitalWrite(PIN_LED_R, (blink++ % 20 < 10)); // Nháy Đỏ
-            digitalWrite(PIN_LED_G, LOW);
-        } 
-        else if (currentState == STATE_RUNNING) {
-            digitalWrite(PIN_LED_R, LOW);
-            digitalWrite(PIN_LED_G, HIGH);
-
+        if (currentState == STATE_RUNNING) {
             float currentAngle = angleSensor.getAngle();
 
-            // Safety: Nghiêng quá mức -> Dừng
-            if (abs(currentAngle) > MAX_TILT) {
-                stopSystem();
-            } else {
-                // Cascaded PID
-                float targetAngle = pidPos.compute(SETPOINT_X, currentDist);
-                float motorPWM = pidAngle.compute(targetAngle, currentAngle);
-                motor.drive((int)motorPWM);
+            // Safety góc nghiêng
+            if (abs(currentAngle) > MAX_TILT + 5.0) stopSystem();
+            else {
+                // ====================================================
+                // 1. VÒNG NGOÀI (PID VỊ TRÍ) - CHỈ CHẠY KHI CÓ SỐ MỚI
+                // ====================================================
+                if (newDataAvailable) {
+                    newDataAvailable = false; // Xóa cờ
+                    
+                    // DEADBAND (VÙNG BÌNH YÊN)
+                    if (abs(currentDist - SETPOINT_X) < 0.8) {
+                        targetAngle = 0; // Về phẳng
+                        pidPos.reset();
+                    } 
+                    else {
+                        // Tính góc cần nghiêng mới
+                        // Lưu ý: PID Pos bây giờ chạy với chu kỳ thực tế là 50ms theo Sensor
+                        targetAngle = pidPos.compute(SETPOINT_X, currentDist);
+                    }
+                }
+
+                // ====================================================
+                // 2. VÒNG TRONG (PID GÓC) - CHẠY LIÊN TỤC (100Hz)
+                // ====================================================
+                // Motor luôn cần được cập nhật liên tục để giữ cái targetAngle kia
+                float rawPWM = pidAngle.compute(targetAngle, currentAngle);
+
+                // BÙ MA SÁT
+                int drivePWM = 0;
+                if (rawPWM > 0) drivePWM = (int)rawPWM + PWM_MIN;
+                else if (rawPWM < 0) drivePWM = (int)rawPWM - PWM_MIN;
+
+                // Kẹp dòng
+                if (drivePWM > MAX_PWM) drivePWM = MAX_PWM;
+                if (drivePWM < -MAX_PWM) drivePWM = -MAX_PWM;
+
+                // Deadband tác động trực tiếp lên motor nếu đã vào đích
+                if (abs(currentDist - SETPOINT_X) < 0.8) {
+                     motor.drive(0);
+                } else {
+                     motor.drive(drivePWM);
+                }
             }
+        } 
+        else { 
+            // IDLE STATE
+            motor.stop();
+            // ... (Led code cũ) ...
         }
+        
         vTaskDelayUntil(&xLastWakeTime, xFrequency);
     }
 }
+// --- DÁN CÁI NÀY VÀO CUỐI CÙNG FILE BallAndBeam.ino ---
 
 void TaskSensor(void *pvParameters) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
     const TickType_t xFrequency = pdMS_TO_TICKS(50); // 20Hz
 
     for (;;) {
-        laser.read();
+        laser.read(); // Đọc Modbus
+        
+        // Bật cờ báo hiệu cho TaskControl biết
+        newDataAvailable = true; 
+        
         vTaskDelayUntil(&xLastWakeTime, xFrequency);
     }
 }
