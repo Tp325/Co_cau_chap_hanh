@@ -48,7 +48,7 @@ void SerialCommander::update() {
                     Serial.println(" cm\033[0m");
                 } 
                 else {
-                    // --- ERROR ---
+                    // --- error ---
                     Serial.print("\033[31m[ERROR] Out of Range! Keep: ");
                     Serial.print(*_targetSetpoint);
                     Serial.printf(" (Must be %.1f - %.1f)\033[0m\n", _minVal, _maxVal);

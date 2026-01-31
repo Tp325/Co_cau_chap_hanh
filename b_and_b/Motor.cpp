@@ -8,7 +8,6 @@ void Motor::init() {
 }
 
 void Motor::drive(int controlSignal) {
-    // Đảo chiều mềm
     int effectiveSignal = controlSignal * directionSign;
     
     int pwmOut = abs(effectiveSignal);

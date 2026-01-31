@@ -1,4 +1,3 @@
-
 #ifndef CONFIG_H
 #define CONFIG_H
 
@@ -42,10 +41,7 @@ const int   LONG_PRESS_MS = 1000;
 
 const float ANGLE_OFFSET = 0;
 
-
-
 // --- PID ---
-
 // 1. VÒNG NGOÀI (VỊ TRÍ)
 const float KP_X = 4.5;
 const float KI_X = 0.01; 

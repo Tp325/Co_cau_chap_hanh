@@ -1,6 +1,5 @@
 #ifndef SENSORS_H
 #define SENSORS_H
-
 #include <Arduino.h>
 #include <ESP32Encoder.h>
 #include <ModbusMaster.h>

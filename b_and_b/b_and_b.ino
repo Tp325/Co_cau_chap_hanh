@@ -1,4 +1,3 @@
-
 #include "Config.h"
 #include "PID.h"
 #include "Motor.h"
@@ -59,13 +58,11 @@ void setup() {
 }
 
 void loop() {
-    
     commander.update();
 
     // Debug (200ms)
     static unsigned long lastPrint = 0;
     if (millis() - lastPrint > 200) {
-        
         Serial.printf("State:%d | Set:%.1f | Dist:%.2f | Ang:%.2f\n", 
                       currentState, SETPOINT_X, laser.getDistance(), angleSensor.getAngle());
         lastPrint = millis();
@@ -73,7 +70,6 @@ void loop() {
 }
 
 // --- LOGIC ---
-
 void stopSystem() {
     currentState = STATE_IDLE;
     motor.stop();
@@ -85,6 +81,7 @@ void startSystem() {
     pidPos.reset();
     pidAngle.reset();
     currentState = STATE_RUNNING;
+
     // Start engine
     digitalWrite(PIN_BUZZER, HIGH); delay(50); digitalWrite(PIN_BUZZER, LOW);
     delay(50);

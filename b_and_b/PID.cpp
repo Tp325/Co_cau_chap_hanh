@@ -10,11 +10,11 @@ PID::PID(float p, float i, float d, float minVal, float maxVal, float timeStep) 
 float PID::compute(float setpoint, float input) {
     float error = setpoint - input;
 
-    // Deadband: Nếu sai số quá nhỏ, coi như bằng 0
+    // Deadband: Nếu sai số quá nhỏ coi như bằng 0
     if (abs(error) < 0.1) error = 0;
 
     integral += error * dt;
-    integral = constrain(integral, outMin, outMax); // Anti-windup
+    integral = constrain(integral, outMin, outMax);
 
     float derivative = (error - prevError) / dt;
     prevError = error;
