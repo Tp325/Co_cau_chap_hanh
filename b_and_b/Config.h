@@ -1,4 +1,4 @@
-/* FILE: Config.h */
+
 #ifndef CONFIG_H
 #define CONFIG_H
 
@@ -22,15 +22,15 @@
 #define MODBUS_REG  0x34
 
 // --- PHYSICS ---
-// Chưa đêm xung mọi thứ tin theo thông số nhà sản xuất cung cấp
+//  Thông số tin vào nhà sản xuất
 const float GEAR_RATIO     = 1.2; 
 const float ENCODER_PPR    = 1152.0;
 const float PULSES_PER_REV = ENCODER_PPR * 4.0 * GEAR_RATIO;
 const float PULSE_TO_DEG   = PULSES_PER_REV / 360.0;
 
-// Kích thước & Setpoint
+// Len & Setpoint
 const float BEAM_LENGTH = 50.0; 
-const float SETPOINT_X  = 17.0;
+extern float SETPOINT_X;
 
 // --- SAFETY ---
 const float SAFETY_DIST = 38.0; 
@@ -40,7 +40,7 @@ const int   MAX_PWM     = 255;
 const int   PWM_MIN     = 25;    
 const int   LONG_PRESS_MS = 1000;
 
-const float ANGLE_OFFSET = 0;     // bù trừ lệch
+const float ANGLE_OFFSET = 0;
 
 
 
@@ -57,6 +57,6 @@ const float KI_TH = 0.8;
 const float KD_TH = 3.0;
 
 // Filter LPF
-const float LPF_ALPHA = 0.7; // không biết tại sao nhưng mà đừng có chỉnh cái này pls
+const float LPF_ALPHA = 0.7; // không biết tại sao nhưng mà đừng có chỉnh cái này
 
 #endif

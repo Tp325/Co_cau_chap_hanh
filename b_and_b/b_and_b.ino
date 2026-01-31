@@ -1,31 +1,39 @@
-/* FILE: BallAndBeam.ino */
+
 #include "Config.h"
 #include "PID.h"
 #include "Motor.h"
 #include "Sensors.h"
+#include "SerialCommander.h"
 
-volatile bool newDataAvailable = false; // Cờ báo có dữ liệu mới
+// setpoint mặc định
+float SETPOINT_X = 17.0;    // cm
 
-// --- KHỞI TẠO ---
+volatile bool newDataAvailable = false; 
+
+// --- MODULES ---
 Motor motor;
 LaserSensor laser;
 AngleSensor angleSensor;
 
-// PID Vòng Ngoài: Input=Cm, Output=Độ
+// PID Configuration
 PID pidPos(KP_X, KI_X, KD_X, -MAX_TILT, MAX_TILT, 0.01);
-// PID Vòng Trong: Input=Độ, Output=PWM
 PID pidAngle(KP_TH, KI_TH, KD_TH, -255, 255, 0.01);
 
-// --- TRẠNG THÁI ---
+// --- KHỞI TẠO COMMANDER ---
+// SETPOINT_X: 5.0cm -> 45.0cm
+SerialCommander commander(&SETPOINT_X, &pidPos, 5.0, 45.0);
+
+// --- State ---
 enum SystemState { STATE_IDLE, STATE_RUNNING };
 volatile SystemState currentState = STATE_IDLE;
 
-// Task FreeRTOS
+// Task
 void TaskSensor(void *pvParameters);
 void TaskControl(void *pvParameters);
 
 void setup() {
-    Serial.begin(115200);
+    // Init serial
+    commander.begin(115200);
 
     // Init IO
     pinMode(PIN_BUTTON, INPUT_PULLUP);
@@ -39,27 +47,32 @@ void setup() {
     angleSensor.init();
 
     // Init Tasks
-    // Task Sensor chạy Core 1 (20Hz)
+    // Core 1: sensors
     xTaskCreatePinnedToCore(TaskSensor, "Sensor", 4096, NULL, 1, NULL, 1);
-    // Task Control chạy Core 0 (100Hz - Realtime)
+    
+    // Core 0: PID & Motor
     xTaskCreatePinnedToCore(TaskControl, "Control", 4096, NULL, 5, NULL, 0);
 
-    Serial.println(">>> BALL & BEAM PRO - OOP VERSION <<<");
+    // Notice of availability
+    Serial.println(">>> BALL & BEAM SYSTEM READY <<<");
+    Serial.println(">>> Type a number (e.g., 25) to change Setpoint <<<");
 }
 
 void loop() {
-    // Chỉ in Debug
+    
+    commander.update();
+
+    // Debug (200ms)
     static unsigned long lastPrint = 0;
     if (millis() - lastPrint > 200) {
-        Serial.print("Stt:"); Serial.print(currentState);
-        Serial.print(",Dir:"); Serial.print(motor.getDirection());
-        Serial.print(",Dst:"); Serial.print(laser.getDistance());
-        Serial.print(",Ang:"); Serial.println(angleSensor.getAngle());
+        
+        Serial.printf("State:%d | Set:%.1f | Dist:%.2f | Ang:%.2f\n", 
+                      currentState, SETPOINT_X, laser.getDistance(), angleSensor.getAngle());
         lastPrint = millis();
     }
 }
 
-// --- LOGIC HỆ THỐNG ---
+// --- LOGIC ---
 
 void stopSystem() {
     currentState = STATE_IDLE;
@@ -68,11 +81,11 @@ void stopSystem() {
 }
 
 void startSystem() {
-    angleSensor.reset(); // Reset góc về 0
+    angleSensor.reset(); 
     pidPos.reset();
     pidAngle.reset();
     currentState = STATE_RUNNING;
-    // Bíp kép báo chạy
+    // Start engine
     digitalWrite(PIN_BUZZER, HIGH); delay(50); digitalWrite(PIN_BUZZER, LOW);
     delay(50);
     digitalWrite(PIN_BUZZER, HIGH); delay(50); digitalWrite(PIN_BUZZER, LOW);
@@ -91,21 +104,18 @@ void handleButton() {
         isPressed = false;
 
         if (duration > LONG_PRESS_MS) {
-            // Nhấn giữ: Đảo chiều (Chỉ khi IDLE)
             if (currentState == STATE_IDLE) {
                 motor.toggleDirection();
                 digitalWrite(PIN_BUZZER, HIGH); delay(500); digitalWrite(PIN_BUZZER, LOW);
             }
         } else if (duration > 50) {
-            // Nhấn ngắn: Start/Stop
             if (currentState == STATE_IDLE) startSystem();
             else stopSystem();
         }
     }
 }
 
-// --- FREERTOS TASKS ---
-
+// --- TASK CONTROL ---
 void TaskControl(void *pvParameters) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
     const TickType_t xFrequency = pdMS_TO_TICKS(10); 
@@ -124,7 +134,7 @@ void TaskControl(void *pvParameters) {
                 float error = abs(currentDist - SETPOINT_X);
                 
                 // ==========================================
-                // 1.PHỄU (giới hạn góc ở những khoảng cách nhất định)
+                // 1. FUNNEL
                 // ==========================================
                 float dynamicMaxTilt = 0;
 
@@ -135,29 +145,27 @@ void TaskControl(void *pvParameters) {
                     dynamicMaxTilt = 4.0;
                 } 
                 else {
-                    dynamicMaxTilt = 0.65;  // không biết tại sao nhưng mà đừng có đụng cái này
+                    dynamicMaxTilt = 0.65;  // tuyệt đối không đụng cái này 
                 }
 
                 // ==========================================
-                // 2. compute PID
+                // 2. COMPUTE PID
                 // ==========================================
                 if (newDataAvailable) {
                     newDataAvailable = false; 
                     
-                    // Nếu vào vùng sát với setpoint (< 0.3)
                     if (error < 0.3) {
                         targetAngle = 0;
                         pidPos.reset(); 
                     }
                     else {
-                        // Tính toán PID
                         float rawTarget = pidPos.compute(SETPOINT_X, currentDist);
 
-                        // Kẹp góc theo phễu
+                        // Clamp
                         if (rawTarget > dynamicMaxTilt) rawTarget = dynamicMaxTilt;
                         if (rawTarget < -dynamicMaxTilt) rawTarget = -dynamicMaxTilt;
 
-                        // Slew Rate Limiter
+                        // Slew Rate
                         float diff = rawTarget - targetAngle;
                         if (diff > MAX_SLEW_RATE) targetAngle += MAX_SLEW_RATE;
                         else if (diff < -MAX_SLEW_RATE) targetAngle -= MAX_SLEW_RATE;
@@ -166,14 +174,9 @@ void TaskControl(void *pvParameters) {
                 }
 
                 // ==========================================
-                // 3. ĐIỀU KHIỂN MOTOR
+                // 3. DRIVE MOTOR
                 // ==========================================
-                
-                // Bù góc thủ công
-                // Setpoint cứ bị lệch về 1 bên, hãy chỉnh số 0.0 này
-                // Ví dụ: targetAngle + (-1.5) nếu thanh bị chúi xuống.
                 float finalTarget = targetAngle + 0.0; 
-
                 float rawPWM = pidAngle.compute(finalTarget, currentAngle);
 
                 int drivePWM = 0;
@@ -194,16 +197,14 @@ void TaskControl(void *pvParameters) {
     }
 }
 
+// --- TASK SENSOR ---
 void TaskSensor(void *pvParameters) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
     const TickType_t xFrequency = pdMS_TO_TICKS(50); // 20Hz
 
     for (;;) {
-        laser.read(); // Đọc Modbus
-        
-        // Bật cờ báo hiệu cho TaskControl biết
+        laser.read(); 
         newDataAvailable = true; 
-        
         vTaskDelayUntil(&xLastWakeTime, xFrequency);
     }
 }
