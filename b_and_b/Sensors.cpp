@@ -4,7 +4,7 @@
 void LaserSensor::init() {
     Serial2.begin(115200, SERIAL_8N1, PIN_RX, PIN_TX);
     node.begin(MODBUS_ID, Serial2);
-    filteredDistance = SETPOINT_X; // Khởi tạo ở giữa để tránh giật
+    filteredDistance = SETPOINT_X; // Khởi tạo ở giữa
 }
 
 void LaserSensor::read() {

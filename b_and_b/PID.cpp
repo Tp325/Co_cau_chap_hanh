@@ -10,7 +10,7 @@ PID::PID(float p, float i, float d, float minVal, float maxVal, float timeStep) 
 float PID::compute(float setpoint, float input) {
     float error = setpoint - input;
 
-    // Deadband: Nếu sai số quá nhỏ, coi như bằng 0 để tránh rung
+    // Deadband: Nếu sai số quá nhỏ, coi như bằng 0 tránh rung
     if (abs(error) < 0.1) error = 0;
 
     integral += error * dt;

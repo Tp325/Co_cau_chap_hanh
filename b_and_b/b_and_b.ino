@@ -108,77 +108,91 @@ void handleButton() {
 
 void TaskControl(void *pvParameters) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = pdMS_TO_TICKS(10); // 100Hz
+    const TickType_t xFrequency = pdMS_TO_TICKS(10); 
 
-    // Biến lưu góc mục tiêu (Giữ nguyên giá trị cũ cho đến khi có tính toán mới)
-    float targetAngle = 0.0;
+    float targetAngle = 0.0; 
+    const float MAX_SLEW_RATE = 0.4; 
 
     for (;;) {
         handleButton();
-        float currentDist = laser.getDistance(); // Lấy giá trị hiện tại (có thể là cũ)
-
-        // --- Safety ---
-        if (currentState == STATE_RUNNING && currentDist > SAFETY_DIST) {
-            stopSystem();
-        }
+        float currentDist = laser.getDistance(); 
 
         if (currentState == STATE_RUNNING) {
             float currentAngle = angleSensor.getAngle();
-
-            // Safety góc nghiêng
             if (abs(currentAngle) > MAX_TILT + 5.0) stopSystem();
             else {
-                // ====================================================
-                // 1. VÒNG NGOÀI (PID VỊ TRÍ) - CHỈ CHẠY KHI CÓ SỐ MỚI
-                // ====================================================
+                float error = abs(currentDist - SETPOINT_X);
+                
+                // ==========================================
+                // 1.PHỄU (giới hạn góc ở những khoảng cách nhất định)
+                // ==========================================
+                float dynamicMaxTilt = 0;
+
+                if (error > 15.0) {
+                    dynamicMaxTilt = 10.0;
+                } 
+                else if (error > 5.0) {
+                    dynamicMaxTilt = 4.0;
+                } 
+                else {
+                    dynamicMaxTilt = 0.65;  // không biết tại sao nhưng mà đừng có đụng cái này
+                }
+
+                // ==========================================
+                // 2. compute PID
+                // ==========================================
                 if (newDataAvailable) {
-                    newDataAvailable = false; // Xóa cờ
+                    newDataAvailable = false; 
                     
-                    // DEADBAND (VÙNG BÌNH YÊN)
-                    if (abs(currentDist - SETPOINT_X) < 0.8) {
-                        targetAngle = 0; // Về phẳng
-                        pidPos.reset();
-                    } 
+                    // Nếu vào vùng sát với setpoint (< 0.3)
+                    if (error < 0.3) {
+                        targetAngle = 0;
+                        pidPos.reset(); 
+                    }
                     else {
-                        // Tính góc cần nghiêng mới
-                        // Lưu ý: PID Pos bây giờ chạy với chu kỳ thực tế là 50ms theo Sensor
-                        targetAngle = pidPos.compute(SETPOINT_X, currentDist);
+                        // Tính toán PID
+                        float rawTarget = pidPos.compute(SETPOINT_X, currentDist);
+
+                        // Kẹp góc theo phễu
+                        if (rawTarget > dynamicMaxTilt) rawTarget = dynamicMaxTilt;
+                        if (rawTarget < -dynamicMaxTilt) rawTarget = -dynamicMaxTilt;
+
+                        // Slew Rate Limiter
+                        float diff = rawTarget - targetAngle;
+                        if (diff > MAX_SLEW_RATE) targetAngle += MAX_SLEW_RATE;
+                        else if (diff < -MAX_SLEW_RATE) targetAngle -= MAX_SLEW_RATE;
+                        else targetAngle = rawTarget;
                     }
                 }
 
-                // ====================================================
-                // 2. VÒNG TRONG (PID GÓC) - CHẠY LIÊN TỤC (100Hz)
-                // ====================================================
-                // Motor luôn cần được cập nhật liên tục để giữ cái targetAngle kia
-                float rawPWM = pidAngle.compute(targetAngle, currentAngle);
+                // ==========================================
+                // 3. ĐIỀU KHIỂN MOTOR
+                // ==========================================
+                
+                // Bù góc thủ công
+                // Setpoint cứ bị lệch về 1 bên, hãy chỉnh số 0.0 này
+                // Ví dụ: targetAngle + (-1.5) nếu thanh bị chúi xuống.
+                float finalTarget = targetAngle + 0.0; 
 
-                // BÙ MA SÁT
+                float rawPWM = pidAngle.compute(finalTarget, currentAngle);
+
                 int drivePWM = 0;
                 if (rawPWM > 0) drivePWM = (int)rawPWM + PWM_MIN;
                 else if (rawPWM < 0) drivePWM = (int)rawPWM - PWM_MIN;
 
-                // Kẹp dòng
                 if (drivePWM > MAX_PWM) drivePWM = MAX_PWM;
                 if (drivePWM < -MAX_PWM) drivePWM = -MAX_PWM;
 
-                // Deadband tác động trực tiếp lên motor nếu đã vào đích
-                if (abs(currentDist - SETPOINT_X) < 0.8) {
-                     motor.drive(0);
-                } else {
-                     motor.drive(drivePWM);
-                }
+                motor.drive(drivePWM);
             }
         } 
         else { 
-            // IDLE STATE
             motor.stop();
-            // ... (Led code cũ) ...
+            targetAngle = 0;
         }
-        
         vTaskDelayUntil(&xLastWakeTime, xFrequency);
     }
 }
-// --- DÁN CÁI NÀY VÀO CUỐI CÙNG FILE BallAndBeam.ino ---
 
 void TaskSensor(void *pvParameters) {
     TickType_t xLastWakeTime = xTaskGetTickCount();

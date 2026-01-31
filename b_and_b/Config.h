@@ -4,7 +4,7 @@
 
 #include <Arduino.h>
 
-// --- HARDWARE PINOUT (GIỮ NGUYÊN) ---
+// --- HARDWARE PINOUT ---
 #define PIN_PWM1    22  
 #define PIN_PWM2    23
 #define PIN_ENABLE  21
@@ -21,8 +21,8 @@
 #define MODBUS_ID   0x50
 #define MODBUS_REG  0x34
 
-// --- PHYSICS (QUAN TRỌNG: CHECK GEAR RATIO) ---
-// BẠN CẦN LÀM BÀI TEST 90 ĐỘ ĐỂ CHẮC CHẮN SỐ 1.2 NÀY ĐÚNG
+// --- PHYSICS ---
+// Chưa đêm xung mọi thứ tin theo thông số nhà sản xuất cung cấp
 const float GEAR_RATIO     = 1.2; 
 const float ENCODER_PPR    = 1152.0;
 const float PULSES_PER_REV = ENCODER_PPR * 4.0 * GEAR_RATIO;
@@ -34,29 +34,29 @@ const float SETPOINT_X  = 17.0;
 
 // --- SAFETY ---
 const float SAFETY_DIST = 38.0; 
-const float MAX_TILT    = 4.0; // Giữ nguyên để có không gian xử lý
+const float MAX_TILT    = 20.0; 
 
-// [THAY ĐỔI 1] Tăng full công suất để phanh cho ăn
-const int   MAX_PWM     = 255;  // Tăng từ 180 lên 255 (Max lực)
-const int   PWM_MIN     = 40;    
-const int   LONG_PRESS_MS = 2000;
+const int   MAX_PWM     = 255;
+const int   PWM_MIN     = 25;    
+const int   LONG_PRESS_MS = 1000;
 
-const float ANGLE_OFFSET = 0.0; 
+const float ANGLE_OFFSET = 0;     // bù trừ lệch
 
-// --- PID TUNING (ĐIỀU TRỊ DAO ĐỘNG) ---
 
-// Vòng Ngoài (Vị trí): GIẢM GA, GIỮ PHANH
-const float KP_X = 2.5;
-const float KI_X = 0.0;  // Giữ nhỏ
-const float KD_X = 25.0;  
 
-// Vòng Trong (Góc): TĂNG ĐỘ CỨNG
-// Motor cần phản ứng nhanh hơn để kịp cứu bóng
-const float KP_TH = 15.0; // Tăng từ 15 lên 25 (Cứng hơn)
-const float KI_TH = 0.05;
-const float KD_TH = 15.0;
+// --- PID ---
+
+// 1. VÒNG NGOÀI (VỊ TRÍ)
+const float KP_X = 4.5;
+const float KI_X = 0.01; 
+const float KD_X = 60.0; 
+
+// 2. VÒNG TRONG (GÓC)
+const float KP_TH = 5.0;  
+const float KI_TH = 0.8;
+const float KD_TH = 3.0;
 
 // Filter LPF
-const float LPF_ALPHA = 0.2; 
+const float LPF_ALPHA = 0.7; // không biết tại sao nhưng mà đừng có chỉnh cái này pls
 
 #endif
