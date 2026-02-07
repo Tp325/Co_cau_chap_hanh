@@ -137,12 +137,18 @@ void TaskControl(void *pvParameters) {
 
                 if (error > 15.0) {
                     dynamicMaxTilt = 10.0;
-                } 
+                }
+                if (error > 12.0) {
+                    dynamicMaxTilt = 5.0;
+                }
                 else if (error > 5.0) {
-                    dynamicMaxTilt = 4.0;
+                    dynamicMaxTilt = 3.0;
+                }   
+                else if (error > 3.0) {
+                    dynamicMaxTilt = 0.8;
                 } 
                 else {
-                    dynamicMaxTilt = 0.65;  // tuyệt đối không đụng cái này 
+                    dynamicMaxTilt = 0.7;  // tuyệt đối không đụng cái này 
                 }
 
                 // ==========================================

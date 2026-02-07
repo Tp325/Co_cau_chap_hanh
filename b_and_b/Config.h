@@ -43,12 +43,12 @@ const float ANGLE_OFFSET = 0;
 
 // --- PID ---
 // 1. VÒNG NGOÀI (VỊ TRÍ)
-const float KP_X = 4.5;
+const float KP_X = 2.5;
 const float KI_X = 0.01; 
-const float KD_X = 60.0; 
+const float KD_X = 45.0; 
 
 // 2. VÒNG TRONG (GÓC)
-const float KP_TH = 5.0;  
+const float KP_TH = 3.0;  
 const float KI_TH = 0.8;
 const float KD_TH = 3.0;
 
